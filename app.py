@@ -1,29 +1,20 @@
-from flask import Flask
+from flask import Flask, json
 from flask_restful import reqparse, abort, Api, Resource
-from flask import Flask
 from flask import render_template, request
 from pytube import YouTube
-from flask_mysqldb import MySQL
-from flask_paginate import Pagination, get_page_parameter
 from flask import jsonify
+from youtubevideos import db
+from youtubevideos import *
 
-app = Flask(__name__)
-app.config['MYSQL_HOST'] = 'localhost'
-app.config['MYSQL_USER'] = 'root'
-app.config['MYSQL_PASSWORD'] = 'admin'
-app.config['MYSQL_DB'] = 'sys'
+db.create_all()
 
-mysql = MySQL(app)
 api = Api(app)
-
 def downloadVideo(url, resolution):
     yt = YouTube(url)
     if yt.streams.filter(progressive = True, file_extension = 'mp4', res=resolution).first():
         yt.streams.filter(res=resolution).first().download('.')
     else: yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first().download()
     return str(yt.video_id), str(yt.title), int(yt.length), str(yt.rating)
-
-
 def get_paginated_list(results, url, start, limit):
         start = int(start)
         limit = int(limit)
@@ -52,37 +43,36 @@ def get_paginated_list(results, url, start, limit):
         # finally extract result according to bounds
         obj['results'] = results[(start - 1):(start - 1 + limit)]
         return obj
+class video(Resource):
+    def get(self, urlid, resolution):
+        id, title, length, rating = downloadVideo('https://www.youtube.com/watch?v='+urlid, resolution)
+        youTubeVideos.add_video(id, title, rating, length)
+        response = Response("Video downloaded", 200, mimetype='application/json')
+        return response
 
-
-
-class Todo(Resource):
-    def get(self, url, resolution):
-        id, title, length, rating = downloadVideo('https://www.youtube.com/watch?v='+url, resolution)
-        cur = mysql.connection.cursor()
-        cur.execute("INSERT INTO youtubeVideos(id,title, length, rating) VALUES (%s, %s, %s, %s)", (id, title, length, rating))
-        mysql.connection.commit()
-        cur.close()
-        return "Video downloaded"
-
-class Todom(Resource):    
-    def get(self):
-        cur = mysql.connection.cursor()
-        cur.execute('SELECT * from youtubevideos')
-        return cur.fetchall()
-class videos(Resource):
+class paginate(Resource):
     def get(self):
         return jsonify(get_paginated_list(
-        Todom.get(self), 
+        youTubeVideos.get_all_videos(), 
         '/videos', 
         start = 1, 
-        limit = 1
-    ))
+        limit = 1))
+
+@app.route('/getall/')
+def getallvideos():
+    response = Response(jsonify(youTubeVideos.get_all_videos()), 200, mimetype='application/json')
+    return jsonify(youTubeVideos.get_all_videos())
+
+@app.route('/filters/<int:length>/<int:rating>')
+def filter(length, rating):
+    required_length = length
+    required_rating = rating
+    res = youTubeVideos.query.filter((youTubeVideos.length <= required_length) & (youTubeVideos.ratings > required_rating)).all()
+    return jsonify([youTubeVideos.json(video) for video in res])
 
 
-api.add_resource(Todo, '/todos/<url>/<resolution>')
-api.add_resource(Todom, '/todom/')
-api.add_resource(videos, '/videos/')
-
+api.add_resource(video,'/video/<urlid>/<resolution>')
+api.add_resource(paginate, '/paginate')
 
 if __name__ == '__main__':
     app.run(debug=True)
